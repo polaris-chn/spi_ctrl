@@ -878,7 +878,10 @@ module ctrl_if(
                                     end
                                 end
                             end
-                            4'ha:
+                            4'ha: begin
+                                per_signal = 1'b1;
+                                next_state = idle;
+                            end
                             4'he: begin (done)
                                 global_block_sector_lock_signal = 1'b1;
                                 next_state = idle;
