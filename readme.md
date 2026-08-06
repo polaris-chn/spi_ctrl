@@ -16,3 +16,5 @@ assgin rstn = reset_hard | reset_soft | reset_por;
 20260806
 （1）从时序图看，AB指令如果在指令输入之后就拉高cs#，那么只退出deep power down模式；如果指令输入之后还有dummy cycle，则先输入device id，再退出deep power down模式
 （2）0C指令在spi和qpi模式下功能不同，在spi下是fast read with 4B address; 在qpi下是burst read with wrap
+
+使用了git进行版本控制，更方便开发
