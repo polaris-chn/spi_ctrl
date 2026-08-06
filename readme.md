@@ -18,3 +18,4 @@ assgin rstn = reset_hard | reset_soft | reset_por;
 （2）0C指令在spi和qpi模式下功能不同，在spi下是fast read with 4B address; 在qpi下是burst read with wrap
 
 使用了git进行版本控制，更方便开发
+云平台相应也使用了git版本控制
