@@ -862,7 +862,9 @@ module ctrl_if(
                                 else
                                     next_state = drive_if_standard;
                             end
-                            4'h5:
+                            4'h5: begin
+                                
+                            end
                             4'h7: begin (done)
                                 if (qpi_mode_reg)
                                     next_state = idle;
