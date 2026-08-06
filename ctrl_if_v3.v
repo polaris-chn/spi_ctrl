@@ -162,7 +162,7 @@ module ctrl_if(
         case(current_state)
             // 只要rstn有效，current_state就会进入到idle，不需要依赖sclk，那么此时是不是不需要判断cs#,直接进行下面的操作？会不会快一点？
             idle: begin
-                if (cs#) begin
+                if (!cs) begin
                     // 是否是por之后的xip模式的判断
                     if (por_xip) 
                         case (vncr_0)
