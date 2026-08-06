@@ -863,7 +863,8 @@ module ctrl_if(
                                     next_state = drive_if_standard;
                             end
                             4'h5: begin
-                                
+                                pes_signal = 1'b1;
+                                next_state = idle;                                
                             end
                             4'h7: begin (done)
                                 if (qpi_mode_reg)
