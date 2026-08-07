@@ -19,3 +19,7 @@ assgin rstn = reset_hard | reset_soft | reset_por;
 
 使用了git进行版本控制，更方便开发
 云平台相应也使用了git版本控制
+
+
+20260807
+（1）版本3中 50指令有效，则01/11指令写入的是sr的副本，否则写入的是sr的本体

@@ -199,7 +199,7 @@ module ctrl_if(
                         4'h2: begin
                             write_array_signal = 1'b1;
                             if (qpi_mode_reg)
-                                next_state = sample_if_quad;
+                            next_state = sample_if_quad;
                             else
                                 next_state = sample_if_standard;
                         end
