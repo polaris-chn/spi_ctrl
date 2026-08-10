@@ -20,6 +20,8 @@ module ctrl_if(
     input [7:0] cnt,
     input p_data_en,
 
+    output wire clear_por_xip,
+
     output reg [2:0] sample_mode,
     output reg [2:0] sample_addr_mode,
     output reg [2:0] sample_data_mode,
@@ -412,6 +414,7 @@ module ctrl_if(
                                 if(cnt == addr_cycle + dummy_cycle)
                                     next_state = drive_dtr_quad;
                             end
+                            default: next_state = idle;
                         endcase
                     end
 
@@ -538,7 +541,7 @@ module ctrl_if(
                             4'hc: begin
                                 erase_block32_signal = 1'b1;
                                 addr_cycle = 8;
-                                if (cnt == 8)
+                                if (cnt == addr_cycle)
                                     next_state = idle;
                             end
                             default : next_state = idle;
@@ -638,12 +641,13 @@ module ctrl_if(
                     4'ha: begin
                         case(cmd[3:0])
                             4'hb: begin
-                                if (!cs) begin
+                                if (cs) begin
                                     exit_dpd_signal = 1'b1;
                                     next_state = idle;
                                 end
                                 else begin
                                     read_devid_signal = 1'b1;
+                                    exit_dpd_signal = 1'b1;
                                     dummy_cycle = 6;
                                     if (cnt ==  dummy_cycle)
                                         next_state = drive_quad;
@@ -806,7 +810,7 @@ module ctrl_if(
                 case(cmd[7:4])
                     4'h0: begin
                         case(cmd[3:0])
-                        4'h1:begin
+                            4'h1:begin
                                 if (write_en_VSR_reg) begin
                                     write_SR_shadow_signal = 1'b1;
                                     write_SR_addr = SR1 & SR2;
@@ -822,46 +826,47 @@ module ctrl_if(
                                     if (cnt == data_cycle)
                                         next_state = idle;
                                 end
-                        end 
-                        4'h2: begin
-                            write_array_signal = 1'b1;
-                            addr_cycle = ads ? 32 : 24;
-                            if (!cs)
+                            end 
+                            4'h2: begin
+                                write_array_signal = 1'b1;
+                                addr_cycle = ads ? 32 : 24;
+                                if (!cs)
+                                    next_state = idle;
+                            end
+                            4'h3: begin
+                                    read_array_signal = 1'b1;
+                                    addr_cycle = ads ? 32 : 24;
+                                    if (cnt == addr_cycle)
+                                        next_state = drive_standard;
+                            end
+                            4'h4: begin
+                                clear_wel = 1'b1;
                                 next_state = idle;
-                        end
-                        4'h3: begin
+                            end
+                            4'h5: begin
+                                read_SR_signal = 1'b1;
+                                read_SR_addr = SR1;
+                                next_state = drive_standard;
+                            end
+                            4'h6: begin
+                                set_wel = 1'b1;
+                                next_state = idle;
+                            end
+                            4'hb: begin
                                 read_array_signal = 1'b1;
                                 addr_cycle = ads ? 32 : 24;
-                                if (cnt == addr_cycle)
+                                dummy_cycle = 8;
+                                if (cnt == addr_cycle + dummy_cycle)
                                     next_state = drive_standard;
-                        end
-                        4'h4: begin
-                            clear_wel = 1'b1;
-                            next_state = idle;
-                        end
-                        4'h5: begin
-                            read_SR_signal = 1'b1;
-                            read_SR_addr = SR1;
-                            next_state = drive_standard;
-                        end
-                        4'h6: begin
-                            set_wel = 1'b1;
-                            next_state = idle;
-                        end
-                        4'hb: begin
-                            read_array_signal = 1'b1;
-                            addr_cycle = ads ? 32 : 24;
-                            dummy_cycle = 8;
-                            if (cnt == addr_cycle + dummy_cycle)
-                                next_state = drive_standard;
-                        end
-                        4'hc: begin
-                            read_array_signal = 1'b1;
-                            addr_cycle = 32;
-                            dummy_cycle = 8;
-                            if (cnt == addr_cycle + dummy_cycle)
-                                next_state = drive_standard;
-                        end
+                            end
+                            4'hc: begin
+                                read_array_signal = 1'b1;
+                                addr_cycle = 32;
+                                dummy_cycle = 8;
+                                if (cnt == addr_cycle + dummy_cycle)
+                                    next_state = drive_standard;
+                            end
+                            default: next_state = idle;
                         endcase
                     end
 
@@ -1175,11 +1180,13 @@ module ctrl_if(
                     4'ha: begin
                         case(cmd[3:0])
                             4'hb: begin
-                                if (!cs) begin
+                                if (cs) begin
                                     exit_dpd_signal = 1'b1;
                                     next_state = idle;
                                 end
                                 else begin
+                                    read_devid_signal = 1'b1;
+                                    exit_dpd_signal = 1'b1;
                                     dummy_cycle = 24;
                                     if (cnt == dummy_cycle)
                                         next_state = drive_standard;
