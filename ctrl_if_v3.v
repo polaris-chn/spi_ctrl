@@ -70,7 +70,14 @@ module ctrl_if(
     output reg enter_dpd_signal,
     output reg write_pwd_signal,
     output reg pwd_lock_unlock_signal,
-    output reg [6:0] wrap_len
+    output reg [6:0] wrap_len,
+    output reg [7:0] cm_cycle,
+    output reg [7:0] cmd_cycle,
+    output reg [7:0] dummy_cycle,
+    output reg [7:0] data_cycle,
+    output reg [7:0] addr_cycle,
+    output reg [7:0] sample_data_cycle
+
 );                  
     parameter idle                  = 5'd0;
     parameter decode_qpi            = 5'd1;
@@ -89,13 +96,6 @@ module ctrl_if(
 
     reg [4:0] current_state;
     reg [4:0] next_state;
-
-    reg [7:0] cm_cycle;
-    reg [7:0] cmd_cycle;
-    reg [7:0] dummy_cycle;
-    reg [7:0] data_cycle;
-    reg [7:0] addr_cycle;
-    reg [7:0] sample_data_cycle;
 
     reg set_en_rst;
     reg write_en_VSR;
