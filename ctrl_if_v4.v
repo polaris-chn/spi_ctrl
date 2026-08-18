@@ -410,6 +410,7 @@ module ctrl_if(
                                 if (~cs)
                                     next_state = idle;
                         end
+
                         default : next_state = idle;
                     endcase
                 end
