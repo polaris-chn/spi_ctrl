@@ -418,6 +418,7 @@ module ctrl_if(
 
             qpi : begin
                 sample_mode = sample_quad;
+                cmd_cycle = 2;
                 case(cmd[7:4])
                     4'h0: begin
                         case(cmd[3:0])
@@ -426,15 +427,15 @@ module ctrl_if(
                                     write_SR_shadow_en = 1'b1;
                                     write_SR_addr = SR1 & SR2;
                                     write_en_VSR = 1'b0;
-                                    sample_data_cycle = 4;
-                                    if (cnt == sample_data_cycle)
+                                    data_cycle = 4;
+                                    if (cnt == data_cycle + cmd_cycle)
                                         next_state = idle;
                                 end
                                 else begin
                                     write_SR_en = 1'b1;
                                     write_SR_addr = SR1 & SR2;
-                                    sample_data_cycle = 4;
-                                    if (cnt == sample_data_cycle)
+                                    data_cycle = 4;
+                                    if (cnt == data_cycle + cmd_cycle)
                                         next_state = idle;
                                 end
                             end 
