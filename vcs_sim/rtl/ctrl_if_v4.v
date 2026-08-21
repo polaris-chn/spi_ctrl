@@ -104,10 +104,10 @@ module ctrl_if(
     reg [4:0] current_state;
     reg [4:0] next_state;
 
-    reg set_en_rst;
+    reg set_rst_en;
     reg set_volatile_sr_write;
     reg clear_volatile_sr_write;
-    reg clear_en_rst;
+    reg clear_rst_en;
     reg spi_wrap_data_en;
     reg qpi_read_param_en;
     reg qpi_read_param_valid;
@@ -227,18 +227,18 @@ module ctrl_if(
             qpi_mode_reg <= qpi_mode_reg;
     end
 
-    reg en_rst_reg;
+    reg rst_en_reg;
     always@(posedge sclk or negedge rstn) begin
         if (!rstn)
-            en_rst_reg <= 1'b0;
+         rst_en_reg <= 1'b0;
         else if (rst_all)
-            en_rst_reg <= 1'b0;
-        else if (set_en_rst)
-            en_rst_reg <= 1'b1;
-        else if (clear_en_rst)
-            en_rst_reg <= 1'b0;
+         rst_en_reg <= 1'b0;
+        else if (set_rst_en)
+         rst_en_reg <= 1'b1;
+        else if (clear_rst_en)
+         rst_en_reg <= 1'b0;
         else
-            en_rst_reg <= en_rst_reg;
+         rst_en_reg <= rst_en_reg;
     end
 
     // 50h置位易失SR写使能；除WRSR(01h/11h)外，任意其他命令在命令边界处清除该使能。
@@ -311,12 +311,12 @@ module ctrl_if(
     always@(*) begin
         write_VCR_en                    = 1'b0;
         spi_wrap_data_en                = 1'b0;
-        set_en_rst                      = 1'b0;
+        set_rst_en                      = 1'b0;
         set_volatile_sr_write           = 1'b0;
         clear_volatile_sr_write         = 1'b0;
         set_qpi_mode                    = 1'b0;
         clear_qpi_mode                  = 1'b0;
-        clear_en_rst                    = 1'b0;
+        clear_rst_en                    = 1'b0;
         qpi_read_param_en               = 1'b0;
         next_state                      = current_state;
         sample_mode                     = 3'd0;
@@ -565,7 +565,7 @@ module ctrl_if(
                 cmd_cycle = 2;
                 // 除指令外的采用模式，包括地址、数据、CM字节、dummy
                 sample_mode = sample_quad;
-                set_en_rst =  1'b0;
+                set_rst_en =  1'b0;
                 if (cnt < cmd_cycle) begin
                     next_state = current_state;
                 end
@@ -829,7 +829,7 @@ module ctrl_if(
                                 end
                             end
                             4'h6: begin
-                                set_en_rst = 1'b1;
+                                set_rst_en = 1'b1;
                                 next_state = idle;
                             end
                             default : next_state = idle;
@@ -902,9 +902,9 @@ module ctrl_if(
                                 next_state = idle;
                             end
                             4'h9 : begin
-                                if (en_rst_reg) begin
+                                if  (rst_en_reg) begin
                                     rst_all = 1'b1;
-                                    clear_en_rst = 1'b1;
+                                    clear_rst_en = 1'b1;
                                     next_state = idle;
                                 end
                                 else
@@ -1145,7 +1145,7 @@ module ctrl_if(
                 cmd_cycle = 8;
                 // 除指令外的采样模式，包括地址、数据、CM字节、dummy
                 sample_mode = sample_standard;
-                set_en_rst =  1'b0;
+                set_rst_en =  1'b0;
                 if (cnt < cmd_cycle) begin
                     next_state = current_state;
                 end
@@ -1483,7 +1483,7 @@ module ctrl_if(
                                 end
                             end
                             4'h6: begin
-                                set_en_rst = 1'b1;
+                                set_rst_en = 1'b1;
                                 next_state = idle;
                             end
                             4'hb: begin
@@ -1585,9 +1585,9 @@ module ctrl_if(
                                 next_state = idle;
                             end
                             4'h9 : begin
-                                if (en_rst_reg) begin
+                                if  (rst_en_reg) begin
                                     rst_all = 1'b1;
-                                    clear_en_rst = 1'b1;
+                                    clear_rst_en = 1'b1;
                                     next_state = idle;
                                 end
                                 else
