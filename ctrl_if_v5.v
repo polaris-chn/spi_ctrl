@@ -1,4 +1,3 @@
-/* verilator lint_off DECLFILENAME */
 module ctrl_if(
     input sclk,
     input rstn,
@@ -8,9 +7,7 @@ module ctrl_if(
     input [7:0] vncr_0,
     input [7:0] cmd,
     // continuous mode byte，是否持续连读模式
-    /* verilator lint_off UNUSEDSIGNAL */
     input [7:0] cm,
-    /* verilator lint_on UNUSEDSIGNAL */
     // por或者reset后，是否进入xip模式，在osc fsm中用reg进行状态保持，作为此模块的输入
     input por_xip,
     input ads,
@@ -18,6 +15,8 @@ module ctrl_if(
     input [7:0] spi_wrap_data,
     // C0指令进来的parameter数据，用于设置read freq, dummcy周期数， wrap length
     input [7:0] qpi_read_param,
+
+    input [7:0] cnt,
 
     output wire clear_por_xip,
     output reg write_SR_shadow_en,
@@ -76,136 +75,61 @@ module ctrl_if(
     output reg [2:0] drive_mode,
     output reg [1:0] write_SR_addr,
     output reg [1:0] read_SR_addr
-);
+);                  
     parameter idle                  = 5'd0;
     parameter xip                   = 5'd1;
     parameter qpi                   = 5'd2;
     parameter spi                   = 5'd3;
 
-    parameter sample_standard       = 3'd1;
-    parameter sample_dual           = 3'd2;
-    parameter sample_quad           = 3'd3;
-    parameter sample_dtr_dual       = 3'd4;
-    parameter sample_dtr_quad       = 3'd5;
+    parameter sample_standard       = 3'd0;
+    parameter sample_dual           = 3'd1;
+    parameter sample_quad           = 3'd2;
+    parameter sample_dtr_dual       = 3'd3;
+    parameter sample_dtr_quad       = 3'd4;
 
-    parameter drive_standard        = 3'd1;
-    parameter drive_dual            = 3'd2;
-    parameter drive_quad            = 3'd3;
-    parameter drive_dtr_dual        = 3'd4;
-    parameter drive_dtr_quad        = 3'd5;
+    parameter drive_standard        = 3'd0;
+    parameter drive_dual            = 3'd1;
+    parameter drive_quad            = 3'd2;
+    parameter drive_dtr_dual        = 3'd3;
+    parameter drive_dtr_quad        = 3'd4;
 
     localparam SR1 = 2'd0;
     localparam SR2 = 2'd1;
     localparam SR3 = 2'd2;
-    // read_SR_addr编码：0=SR1, 1=SR2, 2=SR3；
-    // write_SR_addr编码：0=SR1&SR2, 2=SR3。
-    localparam WR_SR1_SR2 = 2'd0;
 
     reg [4:0] current_state;
     reg [4:0] next_state;
 
     reg set_en_rst;
-    reg set_volatile_sr_write;
-    reg clear_volatile_sr_write;
+    reg write_VSR_en;
     reg clear_en_rst;
     reg spi_wrap_data_en;
     reg qpi_read_param_en;
-    reg qpi_read_param_valid;
-    reg cs_prev;
-    reg [7:0] cnt;
-
-    wire cs_fall;
-    wire cmd_boundary;
-
-    assign cs_fall     = cs_prev & ~cs;
-    assign cmd_boundary = ((current_state == qpi) || (current_state == spi)) && (cnt >= cmd_cycle);
-
-    // C0h P5-P4 dummy-cycle lookup.
-    // STR: 00=4, 01=6, 10=8, 11=10
-    // DTR: 00=10, 01=8, 10=10, 11=10
-    function [7:0] qpi_dummy_sel;
-        input       dtr;
-        input [1:0] p;
-        begin
-            if (dtr) begin
-                case (p)
-                    2'd0 : qpi_dummy_sel = 8'd10;
-                    2'd1 : qpi_dummy_sel = 8'd8;
-                    2'd2 : qpi_dummy_sel = 8'd10;
-                    2'd3 : qpi_dummy_sel = 8'd10;
-                    default : qpi_dummy_sel = 8'd10;
-                endcase
-            end
-            else begin
-                case (p)
-                    2'd0 : qpi_dummy_sel = 8'd4;
-                    2'd1 : qpi_dummy_sel = 8'd6;
-                    2'd2 : qpi_dummy_sel = 8'd8;
-                    2'd3 : qpi_dummy_sel = 8'd10;
-                    default : qpi_dummy_sel = 8'd4;
-                endcase
-            end
-        end
-    endfunction
 
 
-    // 内部SCLK计数器：
-    // CS#=1时清零；CS#=0时在每个sclk上升沿递增；
-    // 计数到8'hFF后饱和，避免长时间连续读时计数器回绕导致使能丢失。
-    // CS#下降沿后的第一个sclk边沿把cnt置1，避免CS#拉高期间无sclk时残留旧计数值。
     always@(posedge sclk or negedge rstn) begin
         if (!rstn)
-            cnt <= 8'd0;
-        else if (rst_all)
-            cnt <= 8'd0;
-        else if (cs)
-            cnt <= 8'd0;
-        else if (cs_fall)
-            cnt <= 8'd1;
-        else if (cnt == 8'hFF)
-            cnt <= cnt;
+            current_state <= idle;
         else
-            cnt <= cnt + 1'b1;
-    end
-
-    always@(posedge sclk or negedge rstn) begin
-        if (!rstn) begin
-            current_state <= idle;
-            cs_prev      <= 1'b1;
-        end
-        else if (rst_all) begin
-            current_state <= idle;
-            cs_prev      <= 1'b1;
-        end
-        else begin
             current_state <= next_state;
-            cs_prev      <= cs;
-        end
     end
 
     reg cmd_xip;
     always@(posedge sclk or negedge rstn) begin
         if (!rstn)
             cmd_xip <= 1'b0;
-        else if (rst_all)
-            cmd_xip <= 1'b0;
         else if (cm[5:4]==2'b10)
             cmd_xip <= 1'b1;
         else
             cmd_xip <= 1'b0;
     end
-
-    // 仅在XIP模式下、mode byte采样完成后，若M5-4 != 10，才清除POR-XIP。
-    // 避免复位/空闲期间cm无效时误清por_xip。
-    wire xip_mode_sampled;
-    assign xip_mode_sampled = (current_state == xip) && (cnt >= (addr_cycle + cm_cycle));
-    assign clear_por_xip = xip_mode_sampled && (cm[5:4] != 2'b10);
+    
+    // cm[5:4]不等于2'b10时，需要对por_xip进行清零
+    assign clear_por_xip = (cm[5:4]==2'b10) ? 1'b0 : 1'b1;
 
     reg [7:0] cmd_reg;
     always@(posedge sclk or negedge rstn) begin
         if (!rstn)
-            cmd_reg <= 8'd0;
-        else if (rst_all)
             cmd_reg <= 8'd0;
         else
             cmd_reg <= cmd;
@@ -216,8 +140,6 @@ module ctrl_if(
     reg clear_qpi_mode;
     always@(posedge sclk or negedge rstn) begin
         if (!rstn)
-            qpi_mode_reg <= 1'b0;
-        else if (rst_all)
             qpi_mode_reg <= 1'b0;
         else if (set_qpi_mode)
             qpi_mode_reg <= 1'b1;
@@ -231,8 +153,6 @@ module ctrl_if(
     always@(posedge sclk or negedge rstn) begin
         if (!rstn)
             en_rst_reg <= 1'b0;
-        else if (rst_all)
-            en_rst_reg <= 1'b0;
         else if (set_en_rst)
             en_rst_reg <= 1'b1;
         else if (clear_en_rst)
@@ -241,64 +161,42 @@ module ctrl_if(
             en_rst_reg <= en_rst_reg;
     end
 
-    // 50h置位易失SR写使能；除WRSR(01h/11h)外，任意其他命令在命令边界处清除该使能。
-    // WRSR写完成后由clear_volatile_sr_write清除。
+    // 只有50指令才能置位，并且只有SR的写指令才能清零
     reg write_VSR_en_reg;
     always@(posedge sclk or negedge rstn) begin
         if (!rstn)
             write_VSR_en_reg <= 1'b0;
-        else if (rst_all)
-            write_VSR_en_reg <= 1'b0;
-        else if (clear_volatile_sr_write)
-            write_VSR_en_reg <= 1'b0;
-        else if (set_volatile_sr_write)
+        else if (write_VSR_en)
             write_VSR_en_reg <= 1'b1;
-        else if (cmd_boundary && (cmd != 8'h50) && (cmd != 8'h01) && (cmd != 8'h11))
-            write_VSR_en_reg <= 1'b0;
         else
-            write_VSR_en_reg <= write_VSR_en_reg;
+            write_VSR_en_reg <= 1'b0;
     end
 
-    // spi下77指令进来的wrap配置。
-    // 复位默认W4=1（不wrap），因此复位值为8'h10。
+    // spi下77指令进来的wrap配置
     reg [7:0] spi_wrap_data_reg;
     always@(posedge sclk or negedge rstn) begin
         if (!rstn)
-            spi_wrap_data_reg <= 8'h10;
-        else if (rst_all)
-            spi_wrap_data_reg <= 8'h10;
+            spi_wrap_data_reg <= 8'd0;
         else if (spi_wrap_data_en)
             spi_wrap_data_reg <= spi_wrap_data;
         else
-            spi_wrap_data_reg <= spi_wrap_data_reg;
+            spi_wrap_data_reg <= 8'd0;
     end
 
-    // qpi下c0指令进来的read parameter配置
+    // qpi下c0指令进来的wrap配置
     reg [7:0] qpi_read_param_reg;
     always@(posedge sclk or negedge rstn) begin
-        if (!rstn) begin
-            qpi_read_param_reg   <= 0;
-            qpi_read_param_valid <= 1'b0;
-        end
-        else if (rst_all) begin
-            qpi_read_param_reg   <= 0;
-            qpi_read_param_valid <= 1'b0;
-        end
-        else if (qpi_read_param_en) begin
-            qpi_read_param_reg   <= qpi_read_param;
-            qpi_read_param_valid <= 1'b1;
-        end
-        else begin
-            qpi_read_param_reg   <= qpi_read_param_reg;
-            qpi_read_param_valid <= qpi_read_param_valid;
-        end
+        if (!rstn)
+            qpi_read_param_reg <= 0;
+        else if (qpi_read_param_en)
+            qpi_read_param_reg <= qpi_read_param;
+        else
+            qpi_read_param_reg <= qpi_read_param_reg;
     end
 
     reg dpd_reg;
     always@(posedge sclk or negedge rstn) begin
         if (!rstn)
-            dpd_reg <= 1'b0;
-        else if (rst_all)
             dpd_reg <= 1'b0;
         else if (enter_dpd_en)
             dpd_reg <= 1'b1;
@@ -309,11 +207,8 @@ module ctrl_if(
     end
 
     always@(*) begin
-        write_VCR_en                    = 1'b0;
         spi_wrap_data_en                = 1'b0;
         set_en_rst                      = 1'b0;
-        set_volatile_sr_write           = 1'b0;
-        clear_volatile_sr_write         = 1'b0;
         set_qpi_mode                    = 1'b0;
         clear_qpi_mode                  = 1'b0;
         clear_en_rst                    = 1'b0;
@@ -377,19 +272,14 @@ module ctrl_if(
         addr_cycle                      = 8'd0;
         case(current_state)
             idle : begin
-                if (cs_fall) begin
-                    if (por_xip | cmd_xip)
-                        next_state = xip;
-                    else if (qpi_mode_reg)
-                        next_state = qpi;
-                    else
-                        next_state = spi;
-                end
-                else begin
-                    next_state = idle;
-                end
+                if (por_xip | cmd_xip)
+                    next_state = xip;
+                else if (qpi_mode_reg)
+                    next_state = qpi;
+                else
+                    next_state = spi;
             end
-
+            
             xip: begin
                 read_array_en = 1'b1;
                 if (por_xip) begin
@@ -398,12 +288,10 @@ module ctrl_if(
                             sample_mode = sample_dual;
                             cm_cycle = 4;
                             addr_cycle = ads ? 16 : 12;
-                            if (cnt >= addr_cycle + cm_cycle) begin
+                            if (cnt == addr_cycle + cm_cycle)
                                 drive_mode = drive_dual;
-                            end
-                            if (cs) begin
-                                next_state = idle;
-                            end
+                                if (cs)
+                                    next_state = idle;
                         end
 
                         8'hfd : begin
@@ -411,12 +299,10 @@ module ctrl_if(
                             cm_cycle = 2;
                             dummy_cycle = 4;
                             addr_cycle = ads ? 8 : 6;
-                            if (cnt >= cm_cycle + dummy_cycle + addr_cycle) begin
+                            if (cnt == cm_cycle + dummy_cycle + addr_cycle)
                                 drive_mode = drive_dtr_dual;
-                            end
-                            if (cs) begin
-                                next_state = idle;
-                            end
+                                if (cs)
+                                    next_state = idle;
                         end
 
                         8'hfe : begin
@@ -424,12 +310,10 @@ module ctrl_if(
                             cm_cycle = 2;
                             dummy_cycle = 4;
                             addr_cycle = ads ? 8 : 6;
-                            if (cnt >= cm_cycle + dummy_cycle + addr_cycle) begin
+                            if (cnt == cm_cycle + dummy_cycle + addr_cycle)
                                 drive_mode = drive_quad;
-                            end
-                            if (cs) begin
-                                next_state = idle;
-                            end
+                                if (cs)
+                                    next_state = idle;
                         end
 
                         8'hfb : begin
@@ -437,12 +321,10 @@ module ctrl_if(
                             cm_cycle = 1;
                             dummy_cycle = 9;
                             addr_cycle = ads ? 4 : 3;
-                            if (cnt >= cm_cycle + dummy_cycle + addr_cycle) begin
+                            if (cnt == cm_cycle + dummy_cycle + addr_cycle)
                                 drive_mode = drive_dtr_quad;
-                            end
-                            if (cs) begin
-                                next_state = idle;
-                            end
+                                if (cs)
+                                    next_state = idle;
                         end
                         default : next_state = idle;
                     endcase
@@ -453,24 +335,20 @@ module ctrl_if(
                             sample_mode = sample_dual;
                             cm_cycle = 4;
                             addr_cycle = ads ? 16 : 12;
-                            if (cnt >= cm_cycle + addr_cycle) begin
+                            if (cnt == cm_cycle + addr_cycle)
                                 drive_mode = drive_dual;
-                            end
-                            if (cs) begin
-                                next_state = idle;
-                            end
+                                if (cs)
+                                    next_state = idle;
                         end
-
+                        
                         8'hbc : begin
                             sample_mode = sample_dual;
                             cm_cycle = 4;
                             addr_cycle = 16;
-                            if (cnt >= cm_cycle + addr_cycle) begin
+                            if (cnt == cm_cycle + addr_cycle)
                                 drive_mode = drive_dual;
-                            end
-                            if (cs) begin
-                                next_state = idle;
-                            end
+                                if (cs)
+                                    next_state = idle;
                         end
 
                         8'hbd : begin
@@ -478,12 +356,10 @@ module ctrl_if(
                             cm_cycle = 2;
                             dummy_cycle = 4;
                             addr_cycle = ads ? 8 : 6;
-                            if (cnt >= cm_cycle + dummy_cycle + addr_cycle) begin
+                            if (cnt == cm_cycle + dummy_cycle + addr_cycle)
                                 drive_mode = drive_dtr_dual;
-                            end
-                            if (cs) begin
-                                next_state = idle;
-                            end
+                                if (cs)
+                                    next_state = idle;
                         end
 
                         8'hbe : begin
@@ -491,25 +367,21 @@ module ctrl_if(
                             cm_cycle = 2;
                             dummy_cycle = 4;
                             addr_cycle = 8;
-                            if (cnt >= cm_cycle + dummy_cycle + addr_cycle) begin
+                            if (cnt == cm_cycle + dummy_cycle + addr_cycle)
                                 drive_mode = drive_dtr_dual;
-                            end
-                            if (cs) begin
-                                next_state = idle;
-                            end
+                                if (cs)
+                                    next_state = idle;
                         end
-
+                        
                         8'heb : begin
                             sample_mode = sample_quad;
                             cm_cycle = 2;
                             dummy_cycle = 4;
                             addr_cycle = ads ? 8 : 6;
-                            if (cnt >= cm_cycle + dummy_cycle + addr_cycle) begin
+                            if (cnt == cm_cycle + dummy_cycle + addr_cycle)
                                 drive_mode = drive_quad;
-                            end
-                            if (cs) begin
-                                next_state = idle;
-                            end
+                                if (cs)
+                                    next_state = idle;
                         end
 
                         8'hec : begin
@@ -517,12 +389,10 @@ module ctrl_if(
                             cm_cycle = 2;
                             dummy_cycle = 4;
                             addr_cycle = 8;
-                            if (cnt >= cm_cycle + dummy_cycle + addr_cycle) begin
+                            if (cnt == cm_cycle + dummy_cycle + addr_cycle)
                                 drive_mode = drive_quad;
-                            end
-                            if (cs) begin
-                                next_state = idle;
-                            end
+                                if (cs)
+                                    next_state = idle;
                         end
 
                         8'hed : begin
@@ -530,12 +400,10 @@ module ctrl_if(
                             cm_cycle = 1;
                             dummy_cycle = 9;
                             addr_cycle = ads ? 4 : 3;
-                            if (cnt >= cm_cycle + dummy_cycle + addr_cycle) begin
+                            if (cnt == cm_cycle + dummy_cycle + addr_cycle)
                                 drive_mode = drive_dtr_quad;
-                            end
-                            if (cs) begin
-                                next_state = idle;
-                            end
+                                if (cs)
+                                    next_state = idle;
                         end
 
                         8'hee : begin
@@ -543,19 +411,14 @@ module ctrl_if(
                             cm_cycle = 1;
                             dummy_cycle = 9;
                             addr_cycle = 4;
-                            if (cnt >= cm_cycle + dummy_cycle + addr_cycle) begin
+                            if (cnt == cm_cycle + dummy_cycle + addr_cycle)
                                 drive_mode = drive_dtr_quad;
-                            end
-                            if (cs) begin
-                                next_state = idle;
-                            end
+                                if (cs)
+                                    next_state = idle;
                         end
 
                         default : next_state = idle;
                     endcase
-                end
-                else begin
-                    next_state = idle;
                 end
             end
 
@@ -566,34 +429,27 @@ module ctrl_if(
                 // 除指令外的采用模式，包括地址、数据、CM字节、dummy
                 sample_mode = sample_quad;
                 set_en_rst =  1'b0;
-                if (cnt < cmd_cycle) begin
-                    next_state = current_state;
-                end
-                else if (dpd_reg && (cmd != 8'hAB) && (cmd != 8'h66) && (cmd != 8'h99)) begin
-                    next_state = idle;
-                end
-                else begin
                 case(cmd[7:4])
                     4'h0: begin
                         case(cmd[3:0])
                             4'h1:begin
                                 if (write_VSR_en_reg) begin
                                     write_SR_shadow_en = 1'b1;
-                                    write_SR_addr = WR_SR1_SR2;
+                                    write_SR_addr = SR1 & SR2;
                                     data_cycle = 4;
-                                    if (cnt >= cmd_cycle + data_cycle) begin
-                                        clear_volatile_sr_write = 1'b1;
+                                    if (cnt == cmd_cycle + data_cycle) begin
+                                        write_VSR_en = 1'b0;
                                         next_state = idle;
                                     end
                                 end
                                 else begin
                                     write_SR_en = 1'b1;
-                                    write_SR_addr = WR_SR1_SR2;
+                                    write_SR_addr = SR1 & SR2;
                                     data_cycle = 4;
-                                    if (cnt >= cmd_cycle + data_cycle)
+                                    if (cnt == cmd_cycle + data_cycle)
                                         next_state = idle;
                                 end
-                            end
+                            end 
                             4'h2: begin
                                 write_array_en = 1'b1;
                                 addr_cycle = ads ? 8 : 6;
@@ -618,18 +474,16 @@ module ctrl_if(
                             4'hb: begin
                                 read_array_en = 1'b1;
                                 addr_cycle = ads ? 8 : 6;
-                                dummy_cycle = qpi_read_param_valid ? qpi_dummy_sel(1'b0, qpi_read_param_reg[5:4]) : 8'd6;
-                                if (cnt >= cmd_cycle + addr_cycle + dummy_cycle) begin
+                                dummy_cycle = 6;
+                                if (cnt == cmd_cycle + addr_cycle + dummy_cycle)
                                     drive_mode = drive_quad;
-                                end
-                                if (cs) begin
-                                    next_state = idle;
-                                end
+                                    if (cs)
+                                        next_state = idle;
                             end
-                            4'hc: begin
+                            4'hc: begin 
                                 read_array_en = 1'b1;
                                 addr_cycle = ads ? 8 : 6;
-                                dummy_cycle = qpi_read_param_valid ? qpi_dummy_sel(1'b0, qpi_read_param_reg[5:4]) : 8'd4;
+                                dummy_cycle = 4;
                                 case(qpi_read_param_reg[1:0])
                                     2'b00: wrap_len = 8;
                                     2'b01: wrap_len = 16;
@@ -637,18 +491,16 @@ module ctrl_if(
                                     2'b11: wrap_len = 64;
                                     default: wrap_len = 0;
                                 endcase
-                                if(cnt >= cmd_cycle + addr_cycle + dummy_cycle) begin
+                                if(cnt == cmd_cycle + addr_cycle + dummy_cycle)
                                     drive_mode = drive_quad;
-                                end
-                                if (cs) begin
-                                    next_state = idle;
-                                end
+                                    if (cs)
+                                        next_state = idle;
                                 end
                             4'he: begin
                                 sample_mode = sample_dtr_quad;
                                 read_array_en = 1'b1;
                                 addr_cycle = ads ? 4 : 3;
-                                dummy_cycle = qpi_read_param_valid ? qpi_dummy_sel(1'b1, qpi_read_param_reg[5:4]) : 8'd10;
+                                dummy_cycle = 10;
                                 case(qpi_read_param_reg[1:0])
                                     2'b00: wrap_len = 8;
                                     2'b01: wrap_len = 16;
@@ -656,12 +508,10 @@ module ctrl_if(
                                     2'b11: wrap_len = 64;
                                     default: wrap_len = 0;
                                 endcase
-                                if(cnt >= cmd_cycle + addr_cycle + dummy_cycle) begin
+                                if(cnt == cmd_cycle + addr_cycle + dummy_cycle)
                                     drive_mode = drive_dtr_quad;
-                                end
-                                if (cs) begin
-                                    next_state = idle;
-                                end
+                                    if (cs)
+                                        next_state = idle;
                             end
                             default: next_state = idle;
                         endcase
@@ -674,8 +524,8 @@ module ctrl_if(
                                     write_SR_shadow_en = 1'b1;
                                     write_SR_addr = SR3;
                                     data_cycle = 2;
-                                    if (cnt >= cmd_cycle + data_cycle) begin
-                                        clear_volatile_sr_write = 1'b1;
+                                    if (cnt == cmd_cycle + data_cycle) begin
+                                        write_VSR_en = 1'b0;
                                         next_state = idle;
                                     end
                                 end
@@ -683,9 +533,9 @@ module ctrl_if(
                                     write_SR_en = 1'b1;
                                     write_SR_addr = SR3;
                                     data_cycle = 2;
-                                    if (cnt >= cmd_cycle + data_cycle)
+                                    if (cnt == cmd_cycle + data_cycle)
                                         next_state = idle;
-                                end
+                                end 
                             end
                             4'h2: begin
                                 write_array_en = 1'b1;
@@ -709,13 +559,13 @@ module ctrl_if(
                             4'h0: begin
                                 erase_sector_en = 1'b1;
                                 addr_cycle = ads ? 8 : 6;
-                                if (cnt >= cmd_cycle + addr_cycle)
+                                if (cnt == cmd_cycle + addr_cycle)
                                     next_state = idle;
                             end
                             4'h1: begin
                                 erase_sector_en = 1'b1;
                                 addr_cycle = 8;
-                                if (cnt >= cmd_cycle + addr_cycle)
+                                if (cnt == cmd_cycle + addr_cycle)
                                     next_state = idle;
                             end
                             4'h7: begin
@@ -724,12 +574,10 @@ module ctrl_if(
                                 else begin
                                     read_pwd_en = 1'b1;
                                     dummy_cycle = 8;
-                                    if (cnt >= cmd_cycle + dummy_cycle) begin
+                                    if (cnt == cmd_cycle + dummy_cycle)
                                         drive_mode = drive_quad;
-                                    end
-                                    if (cs) begin
-                                        next_state = idle;
-                                    end
+                                        if (cs)
+                                            next_state = idle;
                                 end
                             end
                             4'h8: begin
@@ -738,7 +586,7 @@ module ctrl_if(
                                 else begin
                                     write_pwd_en = 1'b1;
                                     data_cycle = 16;
-                                    if (cnt >= cmd_cycle + data_cycle)
+                                    if (cnt == cmd_cycle + data_cycle)
                                         next_state = idle;
                                 end
                             end
@@ -748,7 +596,7 @@ module ctrl_if(
                                 else begin
                                     pwd_lock_unlock_en = 1'b1;
                                     data_cycle = 16;
-                                    if (cnt >= cmd_cycle + data_cycle)
+                                    if (cnt == cmd_cycle + data_cycle)
                                         next_state = idle;
                                 end
                             end
@@ -776,36 +624,33 @@ module ctrl_if(
                     4'h5: begin
                         case(cmd[3:0])
                             4'h0: begin
-                                set_volatile_sr_write = 1'b1;
+                                write_VSR_en = 1'b1;
                                 next_state = idle;
                             end
                             4'h2: begin
                                 erase_block32_en = 1'b1;
                                 addr_cycle = ads ? 8 : 6;
-                                if (cnt >= cmd_cycle + addr_cycle)
+                                if (cnt == cmd_cycle + addr_cycle)
                                     next_state = idle;
                             end
                             4'ha: begin
-                                read_array_en = 1'b1;
                                 addr_cycle = 6;
                                 dummy_cycle = 8;
-                                if(cnt >= cmd_cycle + addr_cycle + dummy_cycle) begin
+                                if(cnt == cmd_cycle + addr_cycle + dummy_cycle)
                                     drive_mode = drive_quad;
-                                end
-                                if (cs) begin
-                                    next_state = idle;
-                                end
+                                    if (cs)
+                                        next_state = idle;
                             end
                             4'hb: begin
                                 data_crc_en = 1;
                                 addr_cycle = 16;
-                                if (cnt >= cmd_cycle + addr_cycle)
+                                if (cnt == cmd_cycle + addr_cycle)
                                     next_state = idle;
                             end
                             4'hc: begin
                                 erase_block32_en = 1'b1;
                                 addr_cycle = 8;
-                                if (cnt >= cmd_cycle + addr_cycle)
+                                if (cnt == cmd_cycle + addr_cycle)
                                     next_state = idle;
                             end
                             default : next_state = idle;
@@ -821,13 +666,11 @@ module ctrl_if(
                             4'h4: begin
                                 read_itcrcr_en = 1'b1;
                                 addr_cycle = 8;
-                                if (cnt >= cmd_cycle + addr_cycle) begin
+                                if (cnt == cmd_cycle + addr_cycle)
                                     drive_mode = drive_quad;
-                                end
-                                if (cs) begin
-                                    next_state = idle;
-                                end
-                            end
+                                    if (cs)
+                                        next_state = idle;
+                            end 
                             4'h6: begin
                                 set_en_rst = 1'b1;
                                 next_state = idle;
@@ -846,7 +689,7 @@ module ctrl_if(
                             end
                             4'h5: begin
                                 pes_en = 1'b1;
-                                next_state = idle;
+                                next_state = idle;                                
                             end
                             4'ha: begin
                                 per_en = 1'b1;
@@ -866,19 +709,17 @@ module ctrl_if(
                                 write_VCR_en = 1'b1;
                                 addr_cycle = ads ? 8 : 6;
                                 data_cycle = 2;
-                                if (cnt >= cmd_cycle + addr_cycle + data_cycle)
+                                if (cnt == cmd_cycle + addr_cycle + data_cycle)
                                     next_state = idle;
                             end
                             4'h5: begin
                                 read_VCR_en = 1'b1;
                                 addr_cycle = ads ? 8 : 6;
                                 dummy_cycle = 8;
-                                if (cnt >= cmd_cycle + addr_cycle + dummy_cycle) begin
+                                if (cnt == cmd_cycle + addr_cycle + dummy_cycle)
                                     drive_mode = drive_quad;
-                                end
-                                if (cs) begin
-                                    next_state = idle;
-                                end
+                                    if (cs)
+                                        next_state = idle;
                             end
                             default : next_state = idle;
                         endcase
@@ -889,19 +730,17 @@ module ctrl_if(
                             4'h0: begin
                                 read_manuid_devid_en = 1'b1;
                                 addr_cycle = 6;
-                                if (cnt >= cmd_cycle + addr_cycle) begin
+                                if (cnt == cmd_cycle + addr_cycle)
                                     drive_mode = drive_quad;
-                                end
-                                if (cs) begin
-                                    next_state = idle;
-                                end
+                                    if (cs)
+                                        next_state = idle;
 
                             end
                             4'h8: begin
                                 global_block_sector_unlock_en = 1'b1;
                                 next_state = idle;
                             end
-                            4'h9 : begin
+                            4'h9 : begin 
                                 if (en_rst_reg) begin
                                     rst_all = 1'b1;
                                     clear_en_rst = 1'b1;
@@ -931,12 +770,10 @@ module ctrl_if(
                                     read_devid_en = 1'b1;
                                     exit_dpd_en = 1'b1;
                                     dummy_cycle = 6;
-                                    if (cnt >= cmd_cycle + dummy_cycle) begin
+                                    if (cnt == cmd_cycle + dummy_cycle)
                                         drive_mode = drive_quad;
-                                    end
-                                    if (cs) begin
-                                        next_state = idle;
-                                    end
+                                        if (cs)
+                                            next_state = idle;
                                 end
                             end
                             default : next_state = idle;
@@ -949,19 +786,17 @@ module ctrl_if(
                                 write_NVCR_en = 1'b1;
                                 addr_cycle = ads ? 8 : 6;
                                 data_cycle = 2;
-                                if (cnt >= cmd_cycle + addr_cycle + data_cycle)
+                                if (cnt == cmd_cycle + addr_cycle + data_cycle)
                                     next_state = idle;
                             end
                             4'h5: begin
                                 read_NVCR_en = 1'b1;
                                 addr_cycle = ads ? 8 : 6;
                                 dummy_cycle = 8;
-                                if (cnt >= cmd_cycle + addr_cycle + dummy_cycle) begin
+                                if (cnt == cmd_cycle + addr_cycle + dummy_cycle)
                                     drive_mode = drive_quad;
-                                end
-                                if (cs) begin
-                                    next_state = idle;
-                                end
+                                    if (cs)
+                                        next_state = idle;
                             end
                             4'h7: begin
                                 set_ads = 1'b1;
@@ -982,7 +817,7 @@ module ctrl_if(
                                     // c0产生的wrap length给qpi的用
                                     // 77产生的wrap length给spi的用
                                     data_cycle = 2;
-                                    if (cnt >= cmd_cycle + data_cycle) begin
+                                    if (cnt == cmd_cycle + data_cycle) begin
                                         qpi_read_param_en = 1'b1;
                                         next_state = idle;
                                     end
@@ -990,7 +825,7 @@ module ctrl_if(
                             4'h5: begin
                                 write_EAR_en = 1'b1;
                                 data_cycle = 2;
-                                if (cnt >= cmd_cycle + data_cycle)
+                                if (cnt == cmd_cycle + data_cycle)
                                     next_state = idle;
                             end
                             4'h7: begin
@@ -1012,13 +847,13 @@ module ctrl_if(
                             4'h8: begin
                                 erase_block64_en = 1'b1;
                                 addr_cycle = ads ? 8 : 6;
-                                if (cnt >= cmd_cycle + addr_cycle)
+                                if (cnt == cmd_cycle + addr_cycle)
                                     next_state = idle;
                             end
-                            4'hc: begin
+                            4'hc: begin 
                                 erase_block64_en = 1'b1;
                                 addr_cycle = 8;
-                                if (cnt >= cmd_cycle + addr_cycle)
+                                if (cnt == cmd_cycle + addr_cycle)
                                     next_state = idle;
                             end
                             default : next_state = idle;
@@ -1031,35 +866,31 @@ module ctrl_if(
                                 read_VLR_en = 1'b1;
                                 addr_cycle = 8;
                                 dummy_cycle = 8;
-                                if (cnt >= cmd_cycle + addr_cycle + dummy_cycle) begin
+                                if (cnt == cmd_cycle + addr_cycle + dummy_cycle)
                                     drive_mode = drive_quad;
-                                end
-                                if (cs) begin
-                                    next_state = idle;
-                                end
+                                    if (cs)
+                                        next_state = idle;
                             end
                             4'h1: begin
                                 write_VLR_en = 1'b1;
                                 addr_cycle = 8;
                                 data_cycle = 2;
-                                if (cnt >= cmd_cycle + addr_cycle + data_cycle)
+                                if (cnt == cmd_cycle + addr_cycle + data_cycle)
                                     next_state = idle;
                             end
                             4'h2: begin
                                 read_NVLR_en = 1'b1;
                                 addr_cycle = 8;
                                 dummy_cycle = 8;
-                                if (cnt >= cmd_cycle + addr_cycle + dummy_cycle) begin
+                                if (cnt == cmd_cycle + addr_cycle + dummy_cycle)
                                     drive_mode = drive_quad;
-                                end
-                                if (cs) begin
-                                    next_state = idle;
-                                end
+                                    if (cs)
+                                        next_state = idle;
                             end
                             4'h3: begin
                                 set_NVLR_en = 1'b1;
                                 addr_cycle = 8;
-                                if (cnt >= cmd_cycle + addr_cycle)
+                                if (cnt == cmd_cycle + addr_cycle)
                                     next_state = idle;
                             end
                             4'h4: begin
@@ -1071,72 +902,54 @@ module ctrl_if(
                                 next_state = idle;
                             end
                             4'hb: begin
-                                read_array_en = 1'b1;
                                 addr_cycle = ads ? 8 : 6;
                                 cm_cycle = 2;
-                                dummy_cycle = qpi_read_param_valid ? qpi_dummy_sel(1'b0, qpi_read_param_reg[5:4]) : 8'd2;
-                                if (cnt >= cmd_cycle + addr_cycle + cm_cycle + dummy_cycle) begin
+                                dummy_cycle = 2;
+                                if (cnt == cmd_cycle + addr_cycle + cm_cycle + dummy_cycle)
                                     drive_mode = drive_quad;
-                                end
-                                if (cs) begin
-                                    next_state = idle;
-                                end
+                                    if (cs)
+                                        next_state = idle;
                             end
                             4'hc: begin
-                                read_array_en = 1'b1;
                                 addr_cycle = 8;
                                 cm_cycle = 2;
-                                dummy_cycle = qpi_read_param_valid ? qpi_dummy_sel(1'b0, qpi_read_param_reg[5:4]) : 8'd2;
-                                if (cnt >= cmd_cycle + addr_cycle + cm_cycle + dummy_cycle) begin
+                                dummy_cycle = 2;
+                                if (cnt == cmd_cycle + addr_cycle + cm_cycle + dummy_cycle)
                                     drive_mode = drive_quad;
-                                end
-                                if (cs) begin
-                                    next_state = idle;
-                                end
+                                    if (cs)
+                                        next_state = idle;
                             end
                             4'hd: begin
-                                read_array_en = 1'b1;
                                 sample_mode = sample_dtr_quad;
                                 addr_cycle = ads ? 4 : 3;
                                 cm_cycle = 1;
-                                dummy_cycle = qpi_read_param_valid ? qpi_dummy_sel(1'b1, qpi_read_param_reg[5:4]) : 8'd9;
-                                if (cnt >= cmd_cycle + addr_cycle + cm_cycle + dummy_cycle) begin
+                                dummy_cycle = 9;
+                                if (cnt == cmd_cycle + addr_cycle + cm_cycle + dummy_cycle)
                                     drive_mode = drive_dtr_quad;
-                                end
-                                if (cs) begin
-                                    next_state = idle;
-                                end
+                                    if (cs)
+                                        next_state = idle;
                             end
                             4'he: begin
-                                read_array_en = 1'b1;
                                 sample_mode = sample_dtr_quad;
                                 addr_cycle = 4;
                                 cm_cycle = 1;
-                                dummy_cycle = qpi_read_param_valid ? qpi_dummy_sel(1'b1, qpi_read_param_reg[5:4]) : 8'd9;
-                                if (cnt >= cmd_cycle + addr_cycle + cm_cycle + dummy_cycle) begin
+                                dummy_cycle = 9;
+                                if (cnt == cmd_cycle + addr_cycle + cm_cycle + dummy_cycle)
                                     drive_mode = drive_dtr_quad;
-                                end
-                                if (cs) begin
-                                    next_state = idle;
-                                end
+                                    if (cs)
+                                        next_state = idle;
                             end
                             default : next_state = idle;
                         endcase
                     end
-
+                        
                     4'hf: begin
-                        case (cmd[3:0])
-                            4'hf : begin
-                                clear_qpi_mode = 1'b1;
-                                next_state = idle;
-                            end
-                            default : next_state = idle;
-                        endcase
+                        clear_qpi_mode = 1'b1;
+                        next_state = idle;
                     end
 
                     default: next_state = idle;
                 endcase
-                end
             end
 
             spi: begin
@@ -1146,34 +959,27 @@ module ctrl_if(
                 // 除指令外的采样模式，包括地址、数据、CM字节、dummy
                 sample_mode = sample_standard;
                 set_en_rst =  1'b0;
-                if (cnt < cmd_cycle) begin
-                    next_state = current_state;
-                end
-                else if (dpd_reg && (cmd != 8'hAB) && (cmd != 8'h66) && (cmd != 8'h99)) begin
-                    next_state = idle;
-                end
-                else begin
                 case(cmd[7:4])
                     4'h0: begin
                         case(cmd[3:0])
                             4'h1:begin
                                 if (write_VSR_en_reg) begin
                                     write_SR_shadow_en = 1'b1;
-                                    write_SR_addr = WR_SR1_SR2;
+                                    write_SR_addr = SR1 & SR2;
                                     data_cycle = 16;
-                                    if (cnt >= cmd_cycle + data_cycle) begin
-                                        clear_volatile_sr_write = 1'b1;
+                                    if (cnt == cmd_cycle + data_cycle) begin
+                                        write_VSR_en = 1'b0;
                                         next_state = idle;
                                     end
                                 end
                                 else begin
                                     write_SR_en = 1'b1;
-                                    write_SR_addr = WR_SR1_SR2;
+                                    write_SR_addr = SR1 & SR2;
                                     data_cycle = 16;
-                                    if (cnt >= cmd_cycle + data_cycle)
+                                    if (cnt == cmd_cycle + data_cycle)
                                         next_state = idle;
                                 end
-                            end
+                            end 
                             4'h2: begin
                                 write_array_en = 1'b1;
                                 addr_cycle = ads ? 32 : 24;
@@ -1183,12 +989,10 @@ module ctrl_if(
                             4'h3: begin
                                     read_array_en = 1'b1;
                                     addr_cycle = ads ? 32 : 24;
-                                    if (cnt >= cmd_cycle + addr_cycle) begin
+                                    if (cnt == cmd_cycle + addr_cycle)
                                         drive_mode = drive_standard;
-                                    end
-                                    if(cs) begin
-                                        next_state = idle;
-                                    end
+                                        if(cs)
+                                            next_state = idle;
                             end
                             4'h4: begin
                                 clear_wel = 1'b1;
@@ -1209,23 +1013,19 @@ module ctrl_if(
                                 read_array_en = 1'b1;
                                 addr_cycle = ads ? 32 : 24;
                                 dummy_cycle = 8;
-                                if (cnt >= cmd_cycle + addr_cycle + dummy_cycle) begin
+                                if (cnt == cmd_cycle + addr_cycle + dummy_cycle)
                                     drive_mode = drive_standard;
-                                end
-                                if (cs) begin
-                                    next_state = idle;
-                                end
+                                    if (cs)
+                                        next_state = idle;
                             end
                             4'hc: begin
                                 read_array_en = 1'b1;
                                 addr_cycle = 32;
                                 dummy_cycle = 8;
-                                if (cnt >= cmd_cycle + addr_cycle + dummy_cycle) begin
+                                if (cnt == cmd_cycle + addr_cycle + dummy_cycle)
                                     drive_mode = drive_standard;
-                                end
-                                if(cs) begin
-                                    next_state = idle;
-                                end
+                                    if(cs)
+                                        next_state = idle;
                             end
                             default: next_state = idle;
                         endcase
@@ -1238,8 +1038,8 @@ module ctrl_if(
                                     write_SR_shadow_en = 1'b1;
                                     write_SR_addr = SR3;
                                     data_cycle = 8;
-                                    if (cnt >= cmd_cycle + data_cycle) begin
-                                        clear_volatile_sr_write = 1'b1;
+                                    if (cnt == cmd_cycle + data_cycle) begin
+                                        write_VSR_en = 1'b0;
                                         next_state = idle;
                                     end
                                 end
@@ -1247,10 +1047,10 @@ module ctrl_if(
                                     write_SR_en = 1'b1;
                                     write_SR_addr = SR3;
                                     data_cycle = 8;
-                                    if (cnt >= cmd_cycle + data_cycle)
+                                    if (cnt == cmd_cycle + data_cycle)
                                         next_state = idle;
                                 end
-                            end
+                            end 
                             4'h2: begin
                                 write_array_en = 1'b1;
                                 addr_cycle = 32;
@@ -1260,12 +1060,10 @@ module ctrl_if(
                             4'h3: begin
                                 read_array_en = 1'b1;
                                 addr_cycle = 32;
-                                if (cnt >= cmd_cycle + addr_cycle) begin
+                                if (cnt == cmd_cycle + addr_cycle)
                                     drive_mode = drive_standard;
-                                end
-                                if(cs) begin
-                                    next_state = idle;
-                                end
+                                    if(cs)
+                                        next_state = idle;
                             end
                             4'h5: begin
                                 read_SR_en = 1'b1;
@@ -1283,13 +1081,13 @@ module ctrl_if(
                             4'h0: begin
                                 erase_sector_en = 1'b1;
                                 addr_cycle = ads ? 32 : 24;
-                                if (cnt >= cmd_cycle + addr_cycle)
+                                if (cnt == cmd_cycle + addr_cycle)
                                     next_state = idle;
                             end
                             4'h1: begin
                                 erase_sector_en = 1'b1;
                                 addr_cycle = 32;
-                                if (cnt >= cmd_cycle + addr_cycle)
+                                if (cnt == cmd_cycle + addr_cycle)
                                     next_state = idle;
                             end
                             4'h7: begin
@@ -1302,13 +1100,13 @@ module ctrl_if(
                                         next_state = idle;
                                 end
                             end
-                            4'h8: begin
+                            4'h8: begin 
                                 if (pwd)
                                     next_state = idle;
                                 else begin
                                     write_pwd_en = 1'b1;
                                     data_cycle = 64;
-                                    if (cnt >= cmd_cycle + data_cycle)
+                                    if (cnt == cmd_cycle + data_cycle)
                                         next_state = idle;
                                 end
                             end
@@ -1318,7 +1116,7 @@ module ctrl_if(
                                 else begin
                                     pwd_lock_unlock_en = 1'b1;
                                     data_cycle = 64;
-                                    if (cnt >= cmd_cycle + data_cycle)
+                                    if (cnt == cmd_cycle + data_cycle)
                                         next_state = idle;
                                 end
                             end
@@ -1336,7 +1134,7 @@ module ctrl_if(
                                 write_array_en = 1'b1;
                                 sample_mode = sample_standard;
                                 addr_cycle = ads ? 32 : 24;
-                                if (cnt >= cmd_cycle + addr_cycle)
+                                if (cnt == cmd_cycle + addr_cycle)
                                     sample_mode = sample_quad;
                                     if (cs)
                                         next_state = idle;
@@ -1345,7 +1143,7 @@ module ctrl_if(
                                 write_array_en = 1'b1;
                                 sample_mode = sample_standard;
                                 addr_cycle = 32;
-                                if (cnt >= cmd_cycle + addr_cycle)
+                                if (cnt == cmd_cycle + addr_cycle)
                                     sample_mode = sample_quad;
                                     if (cs)
                                         next_state = idle;
@@ -1362,26 +1160,20 @@ module ctrl_if(
                                 next_state = idle;
                             end
                             4'hb: begin
-                                read_array_en = 1'b1;
                                 addr_cycle = ads ? 32 : 24;
                                 dummy_cycle = 8;
-                                if(cnt >= cmd_cycle + addr_cycle + dummy_cycle) begin
+                                if(cnt == cmd_cycle + addr_cycle + dummy_cycle)
                                     drive_mode = drive_dual;
-                                end
-                                if (cs) begin
-                                    next_state = idle;
-                                end
+                                    if (cs)
+                                        next_state = idle;
                             end
                             4'hc: begin
-                                read_array_en = 1'b1;
                                 addr_cycle = 32;
                                 dummy_cycle = 8;
-                                if (cnt >= cmd_cycle + addr_cycle + dummy_cycle) begin
+                                if (cnt == cmd_cycle + addr_cycle + dummy_cycle)
                                     drive_mode = drive_dual;
-                                end
-                                if (cs) begin
-                                    next_state = idle;
-                                end
+                                    if (cs)
+                                        next_state = idle;
                             end
                             default : next_state = idle;
                         endcase
@@ -1398,30 +1190,26 @@ module ctrl_if(
                             4'h4: begin
                                 erase_sec_reg_en = 1'b1;
                                 addr_cycle = ads ? 32 : 24;
-                                if (cnt >= cmd_cycle + addr_cycle)
+                                if (cnt == cmd_cycle + addr_cycle)
                                     next_state = idle;
                             end
                             4'h8: begin
                                 read_sec_reg_en = 1'b1;
                                 dummy_cycle = 8;
                                 addr_cycle = ads ? 32 : 24;
-                                if (cnt >= cmd_cycle + addr_cycle + dummy_cycle) begin
+                                if (cnt == cmd_cycle + addr_cycle + dummy_cycle)
                                     drive_mode = drive_standard;
-                                end
-                                if (cs) begin
-                                    next_state = idle;
-                                end
+                                    if (cs)
+                                        next_state = idle;
                             end
                             4'hb: begin
                                 read_uid_en = 1'b1;
                                 addr_cycle = ads ? 32 : 24;
                                 dummy_cycle = 8;
-                                if (cnt >= cmd_cycle + addr_cycle + dummy_cycle) begin
+                                if (cnt == cmd_cycle + addr_cycle + dummy_cycle)
                                     drive_mode = drive_standard;
-                                end
-                                if (cs) begin
-                                    next_state = idle;
-                                end
+                                    if (cs)
+                                        next_state = idle;
                             end
                             default : next_state = idle;
                         endcase
@@ -1430,36 +1218,33 @@ module ctrl_if(
                     4'h5: begin
                         case(cmd[3:0])
                             4'h0: begin
-                                set_volatile_sr_write = 1'b1;
+                                write_VSR_en = 1'b1;
                                 next_state = idle;
                             end
                             4'h2: begin
                                 erase_block32_en = 1'b1;
                                 addr_cycle = ads ? 32 : 24;
-                                if (cnt >= cmd_cycle + addr_cycle)
+                                if (cnt == cmd_cycle + addr_cycle)
                                     next_state = idle;
                             end
                             4'ha: begin
-                                read_array_en = 1'b1;
                                 addr_cycle = 24;
                                 dummy_cycle = 8;
-                                if (cnt >= cmd_cycle + addr_cycle + dummy_cycle) begin
+                                if (cnt == cmd_cycle + addr_cycle + dummy_cycle)
                                     drive_mode = drive_standard;
-                                end
-                                if (cs) begin
-                                    next_state = idle;
-                                end
+                                    if (cs)
+                                        next_state = idle;
                             end
                             4'hb: begin
                                 data_crc_en = 1;
                                 addr_cycle = 64;
-                                if (cnt >= cmd_cycle + addr_cycle)
+                                if (cnt == cmd_cycle + addr_cycle)
                                     next_state = idle;
                             end
                             4'hc: begin
                                 erase_block32_en = 1'b1;
                                 addr_cycle = 32;
-                                if (cnt >= cmd_cycle + addr_cycle)
+                                if (cnt == cmd_cycle + addr_cycle)
                                     next_state = idle;
                             end
                             default : next_state = idle;
@@ -1475,38 +1260,30 @@ module ctrl_if(
                             4'h4: begin
                                 read_itcrcr_en = 1'b1;
                                 addr_cycle = 32;
-                                if (cnt >= cmd_cycle + addr_cycle) begin
+                                if (cnt == cmd_cycle + addr_cycle)
                                     drive_mode = drive_standard;
-                                end
-                                if (cs) begin
-                                    next_state = idle;
-                                end
-                            end
+                                    if (cs)
+                                        next_state = idle;
+                            end 
                             4'h6: begin
                                 set_en_rst = 1'b1;
                                 next_state = idle;
                             end
                             4'hb: begin
-                                read_array_en = 1'b1;
                                 addr_cycle = ads ? 32 : 24;
                                 dummy_cycle = 8;
-                                if(cnt >= cmd_cycle + addr_cycle+dummy_cycle) begin
+                                if(cnt == cmd_cycle + addr_cycle+dummy_cycle)
                                     drive_mode = drive_quad;
-                                end
-                                if (cs) begin
-                                    next_state = idle;
-                                end
+                                    if (cs)
+                                        next_state = idle;
                             end
                             4'hc: begin
-                                read_array_en = 1'b1;
                                 addr_cycle = 32;
                                 dummy_cycle = 8;
-                                if (cnt >= cmd_cycle + addr_cycle + dummy_cycle) begin
+                                if (cnt == cmd_cycle + addr_cycle + dummy_cycle)
                                     drive_mode = drive_quad;
-                                end
-                                if (cs) begin
-                                    next_state = idle;
-                                end
+                                    if (cs)
+                                        next_state = idle;
                             end
                             default : next_state = idle;
                         endcase
@@ -1522,12 +1299,12 @@ module ctrl_if(
                             end
                             4'h5: begin
                                 pes_en = 1'b1;
-                                next_state = idle;
+                                next_state = idle;                                
                             end
                             4'h7: begin
                                     sample_mode = sample_quad;
                                     data_cycle = 8;
-                                    if (cnt >= cmd_cycle + data_cycle) begin
+                                    if (cnt == cmd_cycle + data_cycle) begin
                                         spi_wrap_data_en = 1'b1;
                                         next_state = idle;
                                     end
@@ -1550,19 +1327,17 @@ module ctrl_if(
                                 write_VCR_en = 1'b1;
                                 addr_cycle = ads ? 32 : 24;
                                 data_cycle = 8;
-                                if (cnt >= cmd_cycle + addr_cycle + data_cycle)
+                                if (cnt == cmd_cycle + addr_cycle + data_cycle)
                                     next_state = idle;
                             end
                             4'h5: begin
                                 read_VCR_en = 1'b1;
                                 addr_cycle = ads ? 32 : 24;
                                 dummy_cycle = 8;
-                                if (cnt >= cmd_cycle + addr_cycle + dummy_cycle) begin
+                                if (cnt == cmd_cycle + addr_cycle + dummy_cycle)
                                     drive_mode = drive_standard;
-                                end
-                                if (cs) begin
-                                    next_state = idle;
-                                end
+                                    if (cs)
+                                        next_state = idle;
                             end
                             default : next_state = idle;
                         endcase
@@ -1573,12 +1348,10 @@ module ctrl_if(
                             4'h0: begin
                                 read_manuid_devid_en = 1'b1;
                                 addr_cycle = 24;
-                                if (cnt >= cmd_cycle + addr_cycle) begin
+                                if (cnt == cmd_cycle + addr_cycle)
                                     drive_mode = drive_standard;
-                                end
-                                if (cs) begin
-                                    next_state = idle;
-                                end
+                                    if (cs)
+                                        next_state = idle;
                             end
                             4'h8: begin
                                 global_block_sector_unlock_en = 1'b1;
@@ -1614,12 +1387,10 @@ module ctrl_if(
                                     read_devid_en = 1'b1;
                                     exit_dpd_en = 1'b1;
                                     dummy_cycle = 24;
-                                    if (cnt >= cmd_cycle + dummy_cycle) begin
+                                    if (cnt == cmd_cycle + dummy_cycle)
                                         drive_mode = drive_standard;
-                                    end
-                                    if (cs) begin
-                                        next_state = idle;
-                                    end
+                                        if (cs)
+                                            next_state = idle;
                                 end
                             end
                             default : next_state = idle;
@@ -1632,19 +1403,17 @@ module ctrl_if(
                                 write_NVCR_en = 1'b1;
                                 addr_cycle = ads ? 32 : 24;
                                 data_cycle = 8;
-                                if (cnt >= cmd_cycle + addr_cycle + data_cycle)
+                                if (cnt == cmd_cycle + addr_cycle + data_cycle)
                                     next_state = idle;
                             end
                             4'h5: begin
                                 read_NVCR_en = 1'b1;
                                 addr_cycle = ads ? 32 : 24;
                                 dummy_cycle = 8;
-                                if (cnt >= cmd_cycle + addr_cycle + dummy_cycle) begin
+                                if (cnt == cmd_cycle + addr_cycle + dummy_cycle)
                                     drive_mode = drive_standard;
-                                end
-                                if (cs) begin
-                                    next_state = idle;
-                                end
+                                    if (cs)
+                                        next_state = idle;
                             end
                             4'h7: begin
                                 set_ads = 1'b1;
@@ -1655,54 +1424,42 @@ module ctrl_if(
                                 next_state = idle;
                             end
                             4'hb: begin
-                                read_array_en = 1'b1;
                                 sample_mode = sample_dual;
                                 addr_cycle = ads ? 16 : 12;
                                 cm_cycle = 4;
-                                if(cnt >= cmd_cycle + addr_cycle + cm_cycle) begin
+                                if(cnt == cmd_cycle + addr_cycle + cm_cycle)
                                     drive_mode = drive_dual;
-                                end
-                                if (cs) begin
-                                    next_state = idle;
-                                end
+                                    if (cs)
+                                        next_state = idle;
                             end
                             4'hc: begin
-                                read_array_en = 1'b1;
                                 sample_mode = sample_dual;
                                 addr_cycle = 16;
                                 cm_cycle = 4;
-                                if(cnt >= cmd_cycle + addr_cycle + cm_cycle) begin
+                                if(cnt == cmd_cycle + addr_cycle + cm_cycle)
                                     drive_mode = drive_dual;
-                                end
-                                if (cs) begin
-                                    next_state = idle;
-                                end
+                                    if (cs)
+                                        next_state = idle;
                             end
                             4'hd: begin
-                                read_array_en = 1'b1;
                                 sample_mode = sample_dtr_dual;
                                 addr_cycle = ads ? 8 : 6;
                                 cm_cycle = 2;
                                 dummy_cycle = 4;
-                                if(cnt >= cmd_cycle + addr_cycle + cm_cycle + dummy_cycle) begin
+                                if(cnt == cmd_cycle + addr_cycle + cm_cycle + dummy_cycle)
                                     drive_mode = drive_dtr_dual;
-                                end
-                                if (cs) begin
-                                    next_state = idle;
-                                end
+                                    if (cs)
+                                        next_state = idle;
                             end
                             4'he: begin
-                                read_array_en = 1'b1;
                                 sample_mode = sample_dtr_dual;
                                 addr_cycle = 8;
                                 cm_cycle = 2;
                                 dummy_cycle = 4;
-                                if(cnt >= cmd_cycle + addr_cycle + cm_cycle + dummy_cycle) begin
+                                if(cnt == cmd_cycle + addr_cycle + cm_cycle + dummy_cycle)
                                     drive_mode = drive_dtr_dual;
-                                end
-                                if (cs) begin
-                                    next_state = idle;
-                                end
+                                    if (cs)
+                                        next_state = idle;
                             end
                             default : next_state = idle;
                         endcase
@@ -1713,7 +1470,7 @@ module ctrl_if(
                             4'h5: begin
                                 write_EAR_en = 1'b1;
                                 data_cycle = 8;
-                                if (cnt >= cmd_cycle + data_cycle)
+                                if (cnt == cmd_cycle + data_cycle)
                                     next_state = idle;
                             end
                             4'h7: begin
@@ -1735,13 +1492,13 @@ module ctrl_if(
                             4'h8: begin
                                 erase_block64_en = 1'b1;
                                 addr_cycle = ads ? 32 : 24;
-                                if (cnt >= cmd_cycle + addr_cycle)
+                                if (cnt == cmd_cycle + addr_cycle)
                                     next_state = idle;
                             end
                             4'hc: begin
                                 erase_block64_en = 1'b1;
                                 addr_cycle = 32;
-                                if(cnt >= cmd_cycle + addr_cycle)
+                                if(cnt == cmd_cycle + addr_cycle)
                                     next_state = idle;
                             end
                             default : next_state = idle;
@@ -1749,48 +1506,34 @@ module ctrl_if(
                     end
 
                     4'he: begin
-                        // 77h W4=0时，SPI EB/EC/ED/EE使用W6-W5配置wrap长度。
-                        if (!spi_wrap_data_reg[4]) begin
-                            case (spi_wrap_data_reg[6:5])
-                                2'b00 : wrap_len = 8;
-                                2'b01 : wrap_len = 16;
-                                2'b10 : wrap_len = 32;
-                                2'b11 : wrap_len = 64;
-                                default : wrap_len = 0;
-                            endcase
-                        end
                         case(cmd[3:0])
                             4'h0: begin
                                 read_VLR_en = 1'b1;
                                 addr_cycle = 32;
-                                if (cnt >= cmd_cycle + addr_cycle) begin
+                                if (cnt == cmd_cycle + addr_cycle)
                                     drive_mode = drive_standard;
-                                end
-                                if (cs) begin
-                                    next_state = idle;
-                                end
+                                    if (cs) 
+                                        next_state = idle;
                             end
                             4'h1: begin
                                 write_VLR_en = 1'b1;
                                 addr_cycle = 32;
                                 data_cycle = 8;
-                                if (cnt >= cmd_cycle + addr_cycle + data_cycle)
+                                if (cnt == cmd_cycle + addr_cycle + data_cycle)
                                     next_state = idle;
                             end
                             4'h2: begin
                                 read_NVLR_en = 1'b1;
                                 addr_cycle = 32;
-                                if (cnt >= cmd_cycle + addr_cycle) begin
+                                if (cnt == cmd_cycle + addr_cycle)
                                     drive_mode = drive_standard;
-                                end
-                                if (cs) begin
-                                    next_state = idle;
-                                end
+                                    if (cs)
+                                        next_state = idle;
                             end
                             4'h3: begin
                                 set_NVLR_en = 1'b1;
                                 addr_cycle = 32;
-                                if (cnt >= cmd_cycle + addr_cycle)
+                                if (cnt == cmd_cycle + addr_cycle)
                                     next_state = idle;
                             end
                             4'h4: begin
@@ -1802,64 +1545,51 @@ module ctrl_if(
                                 next_state = idle;
                             end
                             4'hb: begin
-                                read_array_en = 1'b1;
                                 sample_mode = sample_quad;
                                 addr_cycle = ads ? 8 : 6;
                                 cm_cycle = 2;
                                 dummy_cycle = 4;
-                                if (cnt >= cmd_cycle + addr_cycle + cm_cycle + dummy_cycle) begin
+                                if (cnt == cmd_cycle + addr_cycle + cm_cycle + dummy_cycle)
                                     drive_mode = drive_quad;
-                                end
-                                if (cs) begin
-                                    next_state = idle;
-                                end
+                                    if (cs)
+                                        next_state = idle;
                             end
                             4'hc: begin
-                                read_array_en = 1'b1;
                                 sample_mode = sample_quad;
                                 addr_cycle = 8;
                                 cm_cycle = 2;
                                 dummy_cycle = 4;
-                                if (cnt >= cmd_cycle + addr_cycle + cm_cycle + dummy_cycle) begin
+                                if (cnt == cmd_cycle + addr_cycle + cm_cycle + dummy_cycle)
                                     drive_mode = drive_quad;
-                                end
-                                if (cs) begin
-                                    next_state = idle;
-                                end
+                                    if (cs)
+                                        next_state = idle;
                             end
                             4'hd: begin
-                                read_array_en = 1'b1;
                                 sample_mode = sample_dtr_quad;
                                 addr_cycle = ads ? 4 : 3;
                                 cm_cycle = 1;
                                 dummy_cycle = 7;
-                                if (cnt >= cmd_cycle + addr_cycle + cm_cycle + dummy_cycle) begin
+                                if (cnt == cmd_cycle + addr_cycle + cm_cycle + dummy_cycle)
                                     drive_mode = drive_dtr_quad;
-                                end
-                                if (cs) begin
-                                    next_state = idle;
-                                end
+                                    if (cs)
+                                        next_state = idle;
                             end
                             4'he: begin
-                                read_array_en = 1'b1;
                                 sample_mode = sample_dtr_quad;
                                 addr_cycle = 4;
                                 cm_cycle = 1;
                                 dummy_cycle = 7;
-                                if (cnt >= cmd_cycle + addr_cycle + cm_cycle + dummy_cycle) begin
+                                if (cnt == cmd_cycle + addr_cycle + cm_cycle + dummy_cycle)
                                     drive_mode = drive_dtr_quad;
-                                end
-                                if (cs) begin
-                                    next_state = idle;
-                                end
+                                    if (cs)
+                                        next_state = idle;
                             end
                             default : next_state = idle;
                         endcase
                     end
-
+                            
                     default: next_state = idle;
                 endcase
-                end
             end
 
             default: begin
