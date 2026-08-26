@@ -238,7 +238,6 @@ module memory_access (    add_mem, suspend_add, suspend_enable, suspend_pp, susp
         suspend_otpers, otppgm, otprd,otpers,thold_readquad,qpi_wrap_read,ers_add,SW_RST,HW_RST,pp,quadpgm, ex_quadpgm, int_add,ads);
 
     input [(`NB_BIT_ADD_MEM - 1):0] add_mem;
-    output [(`NB_BIT_ADD_MEM - 1):0] add_mem_out;
     input[(`BIT_TO_CODE_MEM-1):0] suspend_add;
     input cer_enable;
     input ber32_enable;
