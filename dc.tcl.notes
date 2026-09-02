@@ -1,0 +1,27 @@
+1. set tcl自带命令，给变量赋值，例如set top ctrl_fsm是就是给top这个变量赋值为ctrl_fsml，后面调用的时候$top
+或者${top}即可
+
+2. set_app_var是Synopsys工具专用命令，用来设置dc内部的application variable，这些变量dc内部已经定义好了，重新
+set_app_var是改成自己想要的值，后面的compile_ultra会自动读这些配置
+
+
+3. target_library 综合时，只能从target库中挑cell来构建电路，最终网表里的标准单元全部来自它；
+
+4. link_library 设计中例化的所有cell/模块，它们的定义从哪里查找，都在这个库里；包括标准单元（基本就是target库）、
+宏单元/IP（如sram, rom, pll, adc, efuse等）、designware组件（如dw01_add, dw_mult等）、层次化子模块（设计里面
+调用的下级模块）、已经编译好的设计（已经综合的.db）;而*代表的不是当前路径，而是当前DC内存中已经存在的设计/库；
+所以link库一般比target库要大；
+
+5. designware 就是synthetic库（dw_foundataion.sldb），是DC内部给的ip库，例如加减乘除这些基本运算的电路，
+都可以根据dw直接综合成成熟的网表，然后根据网表中的cell类型去target库中挑选对应的cell
+DesignWare 组件是工艺无关的 DW01_add、DW02_mult 等本身不是具体的标准单元，而是“可综合的算法/结构模板”。
+它们带有自己的时序和面积估算模型（不是具体某个工艺的门）。DC 在综合时把 DW 组件映射到 target_library 综合
+过程中，DC 会根据约束选择 DW 的实现结构（比如加法器用行波进位、超前进位等），然后最终落实到 target_library 
+里的标准单元（AND、OR、XOR、FA 全加器等）。最终网表里一般不会再出现 DW01_add 综合完成后，正常看到的网表是
+由 target_library 的标准单元组成的。DW01_add 只是中间表示。
+
+6. memory macro库（SRAM/ROM的.db）设计例化了存储器，link时必须提供，否则报unresolved
+
+7. IO/PAD库 综合带pad的芯片顶层时需要
+
+8. symbol_library 只在design_vision GUI里显示原理图符号使用，现代流程基本悬空

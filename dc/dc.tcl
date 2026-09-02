@@ -12,14 +12,20 @@ set_app_var link_library [concat "*" $target_library]
 
 set symbol_library {}
 
+# 综合时某个触发器的Q没有接到下游逻辑（悬空），允许DC删掉它
 set_app_var compile_delete_unloaded_sequential_cells true
+# 层次边界先不动，内部的没有用到的FF仍然要优化掉
 set_app_var compile_optimize_unloaded_seq_logic_with_no_bound_opt true
+# 不打穿边界，同时内部的常量传播还是要优化
 set_app_var compile_enable_constant_propagation_with_no_boundary_opt true
 set_app_var compile_seqmap_propagate_constants true
 set_app_var compile_seqmap_propagate_high_effort true
 set_app_var hdlin_ff_always_sync_set_reset true
+# 读rtl时，保留信号原来的名字，不要随便改名或合并中间网名
 set_app_var hdlin_keep_signal_name all
 
+# 读rtl时，若状态机/编码是one hot，但编码不完整或只覆盖部分状态，DC仍然按one hot去优化
+# 因为one hot逻辑少，时序好
 set hdlin_optimize_partial_one_hot_labels true
 
 set_app_var hdlin_seqmap_sync_search_depth 20
@@ -31,7 +37,9 @@ set_app_var compile_ultra_ungroup_dw false
 set_app_var compile_seqmap_identify_shift_register true
 set_app_var compile_seqmap_identify_shift_register_with_synchronous_logic false
 
+# 同一模块多次例化时，给每份拷贝起不同名字，即“顶层_原名_编号”
 set uniquify_naming_style "${top}_%s_%d"
+# DC自带命令，即端口名和连到这个端口的线名尽量一样，方便后续读网表、对波形、做LEC
 define_name_rules port_name_rules -equal_ports_nets
 
 define_design_lib work -path "./work"
