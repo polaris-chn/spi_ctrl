@@ -1,0 +1,9 @@
+1. DC之后做formality,主要功能是做RTL <------> 综合后网表的形式化等价检查，确认DC综合没有改动功能
+
+2. svf(setup verification file)文件是DC综合时记下的变换日志：改名、优化、常量传播、插ICG、结构变形等，
+formality用它知道rtl是怎么变成网表的，更好对齐比较点，DC是综合时写出svf，然后formality读取这个文件
+
+3. PR之后还会产生.v文件，即门级网表，内容是标准单元例化+连线，可能已经过：
+    时钟树插buffer；优化时序插buffer/resize；hold fix、eco；有时还有scan/物理改动相关
+    所以和DC的.synthesis.v不是同一份，但格式仍然是.v
+    所以pr之后也要做formal，确保后端改动没有改逻辑

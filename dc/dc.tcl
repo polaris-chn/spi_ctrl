@@ -29,12 +29,20 @@ set_app_var hdlin_keep_signal_name all
 set hdlin_optimize_partial_one_hot_labels true
 
 set_app_var hdlin_seqmap_sync_search_depth 20
+# 映射寄存器时，不用输出带反相的FF来实现逻辑
 set_app_var compile_seqmap_enable_output_inversion false
+# 允许一个FF被分析为多个时钟相关
 set_app_var timing_enable_multiple_clocks_per_reg true
+# 子模块上没用到的层次端口，不要自动绑定数理/逻辑连接
 set_app_var bind_unused_hierarchical_pins false
+# 关掉跨层次的inverter优化，DC有时会把反相器挪过模块边界
 set_app_var compile_disable_hierarchical_inverter_opt true
+# compile_ultra时不要把DW部件打散，DC综合DW时可能会拆掉层次摊成一堆门，告诉DC不要这么做
 set_app_var compile_ultra_ungroup_dw false
+# 映射时序逻辑时，尽量把一串FF识别成移位寄存器，用库里的shift-register结构优化，面积更好
 set_app_var compile_seqmap_identify_shift_register true
+# 移位寄存器识别时，如果链路上还有同步控制逻辑，就不要强行按照shift-register来优化
+# 即只认干净的移位链；带同步控制的链，保守处理，不强行优化
 set_app_var compile_seqmap_identify_shift_register_with_synchronous_logic false
 
 # 同一模块多次例化时，给每份拷贝起不同名字，即“顶层_原名_编号”
@@ -42,16 +50,22 @@ set uniquify_naming_style "${top}_%s_%d"
 # DC自带命令，即端口名和连到这个端口的线名尽量一样，方便后续读网表、对波形、做LEC
 define_name_rules port_name_rules -equal_ports_nets
 
+# DC读rtl时，中间结果存进这个库，定义一个work的design lib，物理目录是当前目录下的./work
 define_design_lib work -path "./work"
+# 关掉报告输出的分页模式
 set enable_page_mode false
+# 读rtl时，检查设计里面有没有推断出latch，如果有，就报出来
 set hdlin_check_no_latch "true"
+# 读rtl时，把嵌套的条件语句尽量合并后再做后续处理
 set hdlin_merge_nested_conditional_statements "true"
 
-
+# 把DC的当前工作设计成顶层模块ctrl_fsm，后面的link，uniquify，compile_ultra等都是作用在这个design上 
 current_design $top
+# 按link_library, 把设计里例化的子模块、标准单元、宏对上号，连起来
 link
+# 同一个模块被例化多次时，给每份拷贝起不同模块名，变成独立副本
 uniquify
-
+# 对当前设计做一次全面检查，悬空网，未连接端口，多驱动，缺引用，异常结构等，并打印警告/错误
 check_design
 
 #need_modify
